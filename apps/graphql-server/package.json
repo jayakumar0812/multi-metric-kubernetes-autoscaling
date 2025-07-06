@@ -1,0 +1,23 @@
+{
+  "name": "@hybrid-graphql/graphql-server",
+  "version": "1.0.0",
+  "description": "GraphQL server for hybrid auto-scaling research",
+  "main": "dist/index.js",
+  "scripts": {
+    "start": "node dist/index.js",
+    "dev": "nodemon src/index.ts",
+    "build": "tsc",
+    "clean": "if exist dist rmdir /s /q dist",
+    "test": "echo \"Tests will be added later\""
+  },
+  "dependencies": {
+    "@apollo/server": "^4.10.0",
+    "graphql": "^16.8.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0",
+    "@types/node": "^20.10.0",
+    "ts-node": "^10.9.0",
+    "nodemon": "^3.0.0"
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "name": "hybrid-graphql-autoscaler",
+  "version": "1.0.0",
+  "description": "Hybrid GraphQL Auto-Scaling System with Complexity-Aware Metrics",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "services/*", 
+    "operators/*",
+    "libs/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "dev": "npm run dev --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "clean": "npm run clean --workspaces --if-present",
+    "install-all": "npm install --workspaces",
+    "graphql-server": "npm run dev -w apps/graphql-server",
+    "metrics-server": "npm run dev -w services/hybrid-metrics-server",
+    "complexity-analyzer": "npm run dev -w apps/complexity-analyzer"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0",
+    "concurrently": "^8.2.0",
+    "nodemon": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  }
+}
