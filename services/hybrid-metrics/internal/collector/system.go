@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/jayakumar0812/hybrid-metrics-server/pkg/metrics"
+	"hybrid-metrics/pkg/metrics"
 )
 
 // SystemCollector collects system resource metrics

@@ -7,12 +7,12 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
+	"time" 
 
-	"github.com/jayakumar0812/multi-metric-kubernetes-autoscaling/internal/api"
-	"github.com/jayakumar0812/multi-metric-kubernetes-autoscaling/internal/collector"
-	"github.com/jayakumar0812/multi-metric-kubernetes-autoscaling/internal/config"
-	"github.com/jayakumar0812/multi-metric-kubernetes-autoscaling/internal/fusion"
+	"hybrid-metrics/internal/api"
+	"hybrid-metrics/internal/collector"
+	"hybrid-metrics/internal/config"
+	"hybrid-metrics/internal/fusion"
 )
 
 func main() {

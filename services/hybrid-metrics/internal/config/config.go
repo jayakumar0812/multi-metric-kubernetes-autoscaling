@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/jayakumar0812/multi-metric-kubernetes-autoscaling/pkg/metrics"
+	"hybrid-metrics/pkg/metrics"
 )
 
 // Config holds all application configuration

@@ -7,8 +7,7 @@
     "start": "node dist/index.js",
     "dev": "nodemon src/index.ts",
     "build": "tsc",
-    "clean": "if exist dist rmdir /s /q dist",
-    "test": "echo \"Tests will be added later\""
+    "clean": "if exist dist rmdir /s /q dist"
   },
   "dependencies": {
     "@apollo/server": "^4.10.0",

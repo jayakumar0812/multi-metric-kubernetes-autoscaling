@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/your-username/hybrid-metrics-server/pkg/metrics"
+	"hybrid-metrics/pkg/metrics"
 )
 
 // FusionAlgorithm implements the hybrid auto-scaling algorithm

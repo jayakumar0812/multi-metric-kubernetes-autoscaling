@@ -1,3 +1,3 @@
-module github.com/jayakumar0812/multi-metric-kubernetes-autoscaling
+module hybrid-metrics
 
 go 1.22.0

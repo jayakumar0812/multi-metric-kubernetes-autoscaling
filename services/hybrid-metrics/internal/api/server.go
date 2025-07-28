@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/your-username/hybrid-metrics-server/internal/fusion"
+	"hybrid-metrics/internal/fusion"
 )
 
 // Server provides HTTP API for the hybrid metrics server
