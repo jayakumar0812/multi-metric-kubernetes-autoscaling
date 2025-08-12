@@ -2,69 +2,43 @@ package config
 
 import (
 	"os"
-	"strconv"
 	"time"
-
 	"hybrid-metrics/pkg/metrics"
 )
 
-// Config holds all application configuration
 type Config struct {
-	Port         string                `json:"port"`
-	GraphQLURL   string                `json:"graphql_url"`
-	FusionConfig metrics.FusionConfig  `json:"fusion_config"`
-	LogLevel     string                `json:"log_level"`
+	GraphQLURL    string
+	Port          string
+	FusionConfig  metrics.FusionConfig
 }
 
-// Load loads configuration from environment variables with defaults
 func Load() *Config {
 	return &Config{
-		Port:       getEnvOrDefault("METRICS_SERVER_PORT", "3001"),
-		GraphQLURL: getEnvOrDefault("GRAPHQL_URL", "http://localhost:4000"),
-		LogLevel:   getEnvOrDefault("LOG_LEVEL", "info"),
+		GraphQLURL: getGraphQLURL(),
+		Port:       getPort(),
 		FusionConfig: metrics.FusionConfig{
-			ComplexityWeight:    getEnvFloatOrDefault("COMPLEXITY_WEIGHT", 0.6),
-			CPUWeight:          getEnvFloatOrDefault("CPU_WEIGHT", 0.3),
-			MemoryWeight:       getEnvFloatOrDefault("MEMORY_WEIGHT", 0.1),
-			ScalingThreshold:   getEnvFloatOrDefault("SCALING_THRESHOLD", 0.75),
-			CooldownPeriod:     getEnvDurationOrDefault("COOLDOWN_PERIOD", 30*time.Second),
-			HistoryWindowSize:  getEnvIntOrDefault("HISTORY_WINDOW_SIZE", 100),
-			MinSamplesRequired: getEnvIntOrDefault("MIN_SAMPLES_REQUIRED", 10),
+			// ✅ Use the correct field names from metrics package
+			ComplexityWeight:    0.6,               // ← Correct field name
+			CPUWeight:          0.3,               // ← Correct field name  
+			MemoryWeight:       0.1,               // ← Correct field name
+			ScalingThreshold:   0.7,               // Threshold to trigger scaling
+			CooldownPeriod:     5 * time.Minute,   // Wait time between scaling decisions
+			HistoryWindowSize:  100,               // Number of metrics to keep in history
+			MinSamplesRequired: 5,                 // Minimum samples needed for decisions
 		},
 	}
 }
 
-// Helper functions for environment variable parsing
-func getEnvOrDefault(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
+func getGraphQLURL() string {
+	if url := os.Getenv("GRAPHQL_URL"); url != "" {
+		return url
 	}
-	return defaultValue
+	return "http://graphql-server:4000"
 }
 
-func getEnvFloatOrDefault(key string, defaultValue float64) float64 {
-	if value := os.Getenv(key); value != "" {
-		if parsed, err := strconv.ParseFloat(value, 64); err == nil {
-			return parsed
-		}
+func getPort() string {
+	if port := os.Getenv("PORT"); port != "" {
+		return port
 	}
-	return defaultValue
-}
-
-func getEnvIntOrDefault(key string, defaultValue int) int {
-	if value := os.Getenv(key); value != "" {
-		if parsed, err := strconv.Atoi(value); err == nil {
-			return parsed
-		}
-	}
-	return defaultValue
-}
-
-func getEnvDurationOrDefault(key string, defaultValue time.Duration) time.Duration {
-	if value := os.Getenv(key); value != "" {
-		if parsed, err := time.ParseDuration(value); err == nil {
-			return parsed
-		}
-	}
-	return defaultValue
+	return "3001"
 }

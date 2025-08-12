@@ -1,0 +1,552 @@
+# ============================================
+# COMPLETE KUBERNETES MANIFESTS WITH HPA
+# For Hybrid GraphQL Auto-Scaling System
+# ============================================
+
+# ============================================
+# 1. GRAPHQL SERVER DEPLOYMENT & SERVICE
+# ============================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: graphql-server
+  labels:
+    app: graphql-server
+    component: api
+spec:
+  replicas: 2  # Initial pods (will be managed by HPA)
+  selector:
+    matchLabels:
+      app: graphql-server
+  template:
+    metadata:
+      labels:
+        app: graphql-server
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "4001"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: graphql-server
+        image: lucifer08/auto-scaler:v1
+        imagePullPolicy: Always  # Pull from Docker Hub
+        ports:
+        - containerPort: 4000
+          name: graphql
+          protocol: TCP
+        - containerPort: 4001
+          name: rest-api
+          protocol: TCP
+        
+        # RESOURCE REQUESTS (Required for HPA)
+        resources:
+          requests:
+            cpu: 100m      # 0.1 CPU core minimum
+            memory: 128Mi  # 128MB memory minimum
+          limits:
+            cpu: 500m      # 0.5 CPU core maximum
+            memory: 512Mi  # 512MB memory maximum
+        
+        # ENVIRONMENT VARIABLES
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: GRAPHQL_PORT
+          value: "4000"
+        - name: REST_PORT
+          value: "4001"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: graphql-server
+  labels:
+    app: graphql-server
+spec:
+  type: ClusterIP
+  ports:
+  - name: graphql
+    port: 4000
+    targetPort: 4000
+    protocol: TCP
+  - name: rest-api
+    port: 4001
+    targetPort: 4001
+    protocol: TCP
+  selector:
+    app: graphql-server
+
+---
+# ============================================
+# 2. HYBRID METRICS SERVER DEPLOYMENT & SERVICE
+# ============================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hybrid-metrics-server
+  labels:
+    app: hybrid-metrics-server
+    component: metrics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hybrid-metrics-server
+  template:
+    metadata:
+      labels:
+        app: hybrid-metrics-server
+    spec:
+      containers:
+      - name: hybrid-metrics
+        image: lucifer08/auto-scaler:hy-redis-v1.0
+        imagePullPolicy: Always  # Pull from Docker Hub
+        ports:
+        - containerPort: 8080
+          name: metrics
+          protocol: TCP
+        - containerPort: 3001
+          name: http-api
+          protocol: TCP
+        
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        
+        env:
+        - name: GRAPHQL_URL
+          value: "http://graphql-server:4000"
+        - name: GRAPHQL_STATS_URL
+          value: "http://graphql-server:4001"
+        - name: PORT
+          value: "3001"
+        - name: LOG_LEVEL
+          value: "info"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hybrid-metrics-server
+  labels:
+    app: hybrid-metrics-server
+spec:
+  ports:
+  - name: http-api
+    port: 3001
+    targetPort: 3001
+    protocol: TCP
+  - name: metrics
+    port: 8080
+    targetPort: 8080
+    protocol: TCP
+  selector:
+    app: hybrid-metrics-server
+
+---
+# ============================================
+# 3. CUSTOM METRICS API DEPLOYMENT & SERVICE
+# ============================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: custom-metrics-api
+  labels:
+    app: custom-metrics-api
+    component: metrics-bridge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: custom-metrics-api
+  template:
+    metadata:
+      labels:
+        app: custom-metrics-api
+    spec:
+      serviceAccountName: custom-metrics-apiserver
+      containers:
+      - name: custom-metrics-api
+        image: lucifer08/auto-scaler:custom-api-v1.0 # Updated HTTPS image
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8443  # HTTPS port
+          name: https
+          protocol: TCP
+        
+        # FIXED: Added health checks for HTTPS
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8443
+            scheme: HTTPS
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8443
+            scheme: HTTPS
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        
+        # FIXED: Resource limits in correct location
+        resources:
+          requests:
+            cpu: 50m      # Increased from 25m
+            memory: 64Mi  # Increased from 32Mi
+          limits:
+            cpu: 200m     # Increased from 100m
+            memory: 256Mi # Increased from 128Mi
+        
+        # FIXED: Updated environment variables for HTTPS
+        env:
+        - name: HYBRID_METRICS_URL
+          value: "http://hybrid-metrics-server:3001"
+        - name: GRAPHQL_STATS_URL
+          value: "http://graphql-server:4001"
+        - name: PORT
+          value: "8443"  # Changed to HTTPS port
+        - name: TLS_CERT_FILE
+          value: "/etc/certs/tls.crt"
+        - name: TLS_KEY_FILE
+          value: "/etc/certs/tls.key"
+        - name: LOG_LEVEL
+          value: "info"
+        
+        # FIXED: Volume mounts in correct location
+        volumeMounts:
+        - name: tls-certs
+          mountPath: /etc/certs
+          readOnly: true
+      
+      # FIXED: Volumes in correct location
+      volumes:
+      - name: tls-certs
+        secret:
+          secretName: custom-metrics-api-tls
+
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: custom-metrics-api
+  labels:
+    app: custom-metrics-api
+spec:
+  ports:
+  - name: https  # Changed from 'metrics' to 'https'
+    port: 8443   # Changed from 8081 to 8443
+    targetPort: 8443
+    protocol: TCP
+  selector:
+    app: custom-metrics-api
+---
+# ============================================
+# 4. RBAC FOR CUSTOM METRICS API
+# ============================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: custom-metrics-apiserver
+  namespace: default
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: custom-metrics-apiserver
+rules:
+- apiGroups: [""]
+  resources: ["pods", "nodes", "nodes/stats"]
+  verbs: ["get", "list"]
+- apiGroups: ["external.metrics.k8s.io"]
+  resources: ["*"]
+  verbs: ["*"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: custom-metrics-apiserver
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: custom-metrics-apiserver
+subjects:
+- kind: ServiceAccount
+  name: custom-metrics-apiserver
+  namespace: default
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: hpa-external-metrics-reader
+rules:
+- apiGroups: ["external.metrics.k8s.io"]
+  resources: ["*"]
+  verbs: ["get", "list"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: hpa-external-metrics-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: hpa-external-metrics-reader
+subjects:
+- kind: ServiceAccount
+  name: horizontal-pod-autoscaler
+  namespace: kube-system
+
+---
+# ============================================
+# 5. EXTERNAL METRICS API SERVICE REGISTRATION
+# ============================================
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: v1beta1.external.metrics.k8s.io
+  labels:
+    app: custom-metrics-api
+spec:
+  service:
+    name: custom-metrics-api
+    namespace: default
+    port: 8443  # Changed from 8081 to 8443
+  group: external.metrics.k8s.io
+  version: v1beta1
+  insecureSkipTLSVerify: true  # For self-signed certificates
+  groupPriorityMinimum: 100
+  versionPriority: 100
+---
+# ============================================
+# 6. HORIZONTAL POD AUTOSCALER (HPA)
+# ============================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: graphql-complexity-hpa
+  labels:
+    app: graphql-server
+    component: autoscaler
+    research: hybrid-scaling
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: graphql-server
+  minReplicas: 2
+  maxReplicas: 10
+  
+  # HYBRID AUTO-SCALING METRICS
+  metrics:
+  
+  # PRIMARY METRIC: Your GraphQL Complexity Score (Innovation!)
+  - type: External
+    external:
+      metric:
+        name: graphql_complexity_score
+        selector:
+          matchLabels:
+            service: graphql-server
+      target:
+        type: Value
+        averageValue: "50000"  # Scale up when avg complexity > 400 (×100 for precision)
+
+  # INTELLIGENT SCALING BEHAVIOR
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60  # React quickly to complexity spikes
+      policies:
+      - type: Percent
+        value: 100    # Double pods when high complexity detected
+        periodSeconds: 30
+      - type: Pods
+        value: 1      # Or add 2 pods at once (whichever is more)
+        periodSeconds: 30
+      selectPolicy: Max  # Use the more aggressive scaling policy
+      
+    scaleDown:
+      stabilizationWindowSeconds: 60  # Be conservative about scaling down
+      policies:
+      - type: Percent
+        value: 50     # Remove of pods at a time
+        periodSeconds: 30
+      - type: Pods
+        value: 1      # Or remove 1 pod at a time (whichever is less)
+        periodSeconds: 30
+      selectPolicy: Min  # Use the more conservative scaling policy
+---
+apiVersion: v1
+data:
+  tls.crt: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURUekNDQWplZ0F3SUJBZ0lVWm1LSFovbWdxWEVhU2ZtNnFrRlR3SGJod2h3d0RRWUpLb1pJaHZjTkFRRUwKQlFBd056RTFNRE1HQTFVRUF3d3NZM1Z6ZEc5dExXMWxkSEpwWTNNdFlYQnBMbVJsWm1GMWJIUXVjM1pqTG1OcwpkWE4wWlhJdWJHOWpZV3d3SGhjTk1qVXdPREEwTVRJMU9ERXpXaGNOTWpZd09EQTBNVEkxT0RFeldqQTNNVFV3Ck13WURWUVFEREN4amRYTjBiMjB0YldWMGNtbGpjeTFoY0drdVpHVm1ZWFZzZEM1emRtTXVZMngxYzNSbGNpNXMKYjJOaGJEQ0NBU0l3RFFZSktvWklodmNOQVFFQkJRQURnZ0VQQURDQ0FRb0NnZ0VCQU50NDMyVlZCaTFZQzI5eQpYdEdYZVpkNXZ6cHpDc3h0b0ZwaS9JdGdmeUFPVkpvaXBmdEZZRGRqTzdNUFRNaHZTNDdjSWtMMjJ6WGJOZENvCnpVMUwwaFRKY1hjNEV6NjVmcHYwQk91c3E3MTIzNC9GMHJQb2FXQ3NKUHNWV0kxOEt6dHo4T0NVSXNheExXcEYKSlpTQS80TGczL1FvUUp6cEN1bXcraTBSUjZxUTdVZnV3Mmtzc3ZoTDY5TUVIOUpNT2hzQnRsckxvL1ErZUNyUwpSY0dvdDVOaTllc2NUUmRNWEg3VG9TcmEvektDY3BwWGlXTVBseUsrZEYxWngrK3dITHFYeDc4TkVMUVF2dHFsCnBTRGVaU1E2TEkxZVYvbTAzQnMyeEZRajVvemdraDJjWkcxV0JzZlRUYkdhQ1EzMy9MbC8rblNmK1NqVXhzQUsKYzdRUlFwTUNBd0VBQWFOVE1GRXdIUVlEVlIwT0JCWUVGT21EQ0tGeDNhY3lhNlc3TkVta2hFVkpDMzE4TUI4RwpBMVVkSXdRWU1CYUFGT21EQ0tGeDNhY3lhNlc3TkVta2hFVkpDMzE4TUE4R0ExVWRFd0VCL3dRRk1BTUJBZjh3CkRRWUpLb1pJaHZjTkFRRUxCUUFEZ2dFQkFISFFnd1NPRUF4VUpqYzJnU2JaZ0VpcEg5YmJqR1hMMDBJQ2cvbjUKOVFHM1p2eWE3NGZZWkhBeFhWNU0vZTNzb09QTHNTQ21yTG1yM0dIaHNFVXJmS2VNUDkwcitSU2VGVEpJbFJtNAp2bk56UEkvakFSZEVDQjUwWHNUV1RIdDBFVXJmaVlaSnR4RXpkS3pvdUEvTi95UDFXa0pRRlprcmpHWjF6QnFsCmJJSnlFMzcxNUlCTTgvMlloZThFQm83OUxqSTRhVmlyWmRGZzFvZHBWY3hIM3p1aGtwSEY3eWRPd2IwaVZyM1AKWEwrcTBEMDdxSXo2d1RCMDV0V0U0b2FIaWFtU1dhWGt6RXhqcHBXaUhFNTF5blFuaXhzYXNVSVJSZnoybjFOQwp0TktKUTBmTWNYSzYyYUJTdVBRK3ljbkJJQlhtTzVVaFJRWkVubVdNaXZ5MS9UWT0KLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=
+  tls.key: LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JSUV2Z0lCQURBTkJna3Foa2lHOXcwQkFRRUZBQVNDQktnd2dnU2tBZ0VBQW9JQkFRRGJlTjlsVlFZdFdBdHYKY2w3UmwzbVhlYjg2Y3dyTWJhQmFZdnlMWUg4Z0RsU2FJcVg3UldBM1l6dXpEMHpJYjB1TzNDSkM5dHMxMnpYUQpxTTFOUzlJVXlYRjNPQk0rdVg2YjlBVHJyS3U5ZHQrUHhkS3o2R2xnckNUN0ZWaU5mQ3M3Yy9EZ2xDTEdzUzFxClJTV1VnUCtDNE4vMEtFQ2M2UXJwc1BvdEVVZXFrTzFIN3NOcExMTDRTK3ZUQkIvU1REb2JBYlpheTZQMFBuZ3EKMGtYQnFMZVRZdlhySEUwWFRGeCswNkVxMnY4eWduS2FWNGxqRDVjaXZuUmRXY2Z2c0J5Nmw4ZS9EUkMwRUw3YQpwYVVnM21Va09peU5YbGY1dE53Yk5zUlVJK2FNNEpJZG5HUnRWZ2JIMDAyeG1na045L3k1Zi9wMG4va28xTWJBCkNuTzBFVUtUQWdNQkFBRUNnZ0VBVW9XV2FnR1lPd0I1L0VPaXgyZ1BQaGQzQWNFejlEM2NKMkJFMlJ0RmNZWXgKNVdyVndpOEp5SW0xYnRSMzZIMkFpWXpZRFJuSXZ1MVh4TWRUdXBhaHZWTXBLTXlhMytEYmJFUktmVnNGa0UzYwpMYkVTVXJjMnVEVENDdTZ4eHpGRENDM0dDb3Rvc0JENnBKU3ZWckZTWWFHd1U1dTIvOGpZWTVvNTF5eENLQzEzCnl6Y1MwN25PRWJvWXFSRFhFdHR4SGZ4REZYRmlVUkh6aklRSXRITG1BZWYxcm9LczdMb2M2ZXRwTWJOQ0NlM3gKRmpSb3F0R1YzL0ErT1dxSE42aERaVXdSVmhhdDh3VzJURk9SWTdVemRwNW92RG1QYzRsbUNBRERZOVJsZlBNWgpZNkVsUzBncU5VbzlWYk9Qa2xiZDhoTTZNVWdXT2VTMWRIeWxscWpPY1FLQmdRRGtleHhJWEdXbUtUY0F2elN1CkFEbXJLei9ySkZ6d1crc29PTThCaWhJZHBscm1wam10VGwvTnlSbDErS0tyOVl6bW9EZXdndzJDN3R3MStvVTIKeWJXS0ZCU1UvWHlFZ2ZIdytJVllUSGREamd3TEVnQmZldUdYK3pvZTBlUVlRS1B1K3ZESHdITWhjTVN0dFZMNApGd0NaYklhOXk5cUdxOVZuWFdpeWZrRVNkUUtCZ1FEMTUvMTlYbUtYd001S21iUzVKeXdDMXU4dWZhSFdhZGZqCkpqc2xOa2lPWFlBb2Q2UWNSTzh6THpzYVFEMTdEbXJ0NW1scFRzVkJnSzBpZHU5bnJLb0hONHVWOTV0YUFCZHYKYmFDLzhkdjR6VjNkRGcyck82OG94R1FxbjlGaFhqUU5kNS9Icmk0ZHB5RU1VZlJ4Q29OeVFDN25ETy9XcUM4dwpQOWxsYkJuUDV3S0JnQ1NhUUY2clJyR0cyc1BvM2NTZVRwN0lUL1lZbmpiM1VzWGZ5L0hnTDZUR1dMdW9sNGJYCkRtd0dNbWoreXZpblhzbzNrcFJaZWxtbWNHckpWbnYvZG5ESFpNQzFselFYS1M1RWNnQkNSN3p2emFnY1d5ancKbzZGWVl1ZzdFY0o4NElaUmR5OVkrbGk2R3hnRSsyUzVNcVJoaVhod1p2SzZKbmJudFBVYldzdGRBb0dCQU56SwpCbXo1UVBiV1U2TGhyVVdOS1ZRSFhjdlZXMmpqc2NZdXZtNGo5ak4xT2l1YmVJczFUYndjVFNtOXdqWHA5UkpUCmpoUFNlUVBlSUJYUXloWEJEd3paejRmQVFRa25DZU92ZitTM3FQVVVsNUZ5RzgzQ0VmdzlrVjVBRHNRb3kvM0gKaVh2RkpYelVZYlRwSk53V1AzMW1xWFlreEhkc25LbnF1aXY1U3BmREFvR0JBTFlQNm8vcFJwNTY1emlXdkdxcQpPUlRYSlFzSWxkdEIzZVlZTkVnM1lMMTc0MlhYTWpScG9qb1A0akN0R0pMMlgzT01NT3N4cTRTSEt3cW51NXJBCmtFYnFYeS9HSnd1UFNmanc3MlpyNHpiSXpnQ21NNzR6b2Rnc2g5R2M2aTRleDhEdExRaHdQTll0RFFSdCsxbmUKNkR2VXl1NlN2a1lIeURxb2JaSGRqSUthCi0tLS0tRU5EIFBSSVZBVEUgS0VZLS0tLS0K
+kind: Secret
+metadata:
+  creationTimestamp: null
+  name: custom-metrics-api-tls
+  namespace: default
+type: kubernetes.io/tls
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  labels:
+    app: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+      - name: redis
+        image: redis:7-alpine
+        ports:
+        - containerPort: 6379
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+        command: ["redis-server"]
+        args: ["--maxmemory", "100mb", "--maxmemory-policy", "allkeys-lru"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-service
+spec:
+  selector:
+    app: redis
+  ports:
+  - port: 6379
+    targetPort: 6379
+  type: ClusterIP
+---
+# ============================================
+# 7. CONFIGMAP FOR TEST QUERIES
+# ============================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-queries
+  labels:
+    app: graphql-server
+    component: testing
+data:
+  simple-query.graphql: |
+    query SimpleUserQuery {
+      user(id: "1") {
+        name
+        email
+      }
+    }
+    
+  medium-query.graphql: |
+    query MediumComplexityQuery {
+      users(first: 10) {
+        name
+        email
+        posts(first: 5) {
+          title
+          content
+        }
+      }
+    }
+    
+  complex-query.graphql: |
+    query ComplexAnalyticsQuery {
+      systemAnalytics {
+        totalUsers
+        totalPosts
+        topUsers(limit: 20) {
+          name
+          email
+          posts(first: 10) {
+            title
+            comments(first: 10) {
+              content
+              author {
+                name
+              }
+            }
+          }
+        }
+      }
+    }
+    
+  very-complex-query.graphql: |
+    query VeryComplexNestedQuery {
+      systemAnalytics {
+        totalUsers
+        totalPosts
+        topUsers(limit: 50) {
+          name
+          email
+          profile {
+            bio
+            avatar
+          }
+          posts(first: 20, orderBy: "createdAt") {
+            title
+            content
+            tags
+            comments(first: 15, orderBy: "likes") {
+              content
+              likes
+              author {
+                name
+                email
+                profile {
+                  bio
+                }
+                posts(first: 5) {
+                  title
+                }
+              }
+            }
+          }
+          followers(first: 10) {
+            name
+            email
+          }
+        }
+        trending {
+          posts(first: 25) {
+            title
+            author {
+              name
+            }
+            comments(first: 20) {
+              content
+            }
+          }
+        }
+      }
+    }
+

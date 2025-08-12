@@ -6,15 +6,40 @@ import (
 	"time"
 
 	"hybrid-metrics/internal/fusion"
+	"hybrid-metrics/pkg/metrics"
 )
+
+// FusionAlgorithmInterface defines the interface that both FusionAlgorithm and RedisFusionAlgorithm implement
+type FusionAlgorithmInterface interface {
+	GetStats() metrics.FusionStats
+	GetHistory() metrics.MetricHistory
+	ProcessMetrics() metrics.ScalingDecision
+	AddComplexityData(complexity float64, timestamp time.Time)
+	AddSystemData(systemMetrics metrics.SystemMetrics, timestamp time.Time)
+	HealthCheck() error
+}
 
 // Server provides HTTP API for the hybrid metrics server
 type Server struct {
-	fusionAlgorithm *fusion.FusionAlgorithm
+	fusionAlgorithm FusionAlgorithmInterface
 }
 
-// NewServer creates a new API server
-func NewServer(fusionAlgorithm *fusion.FusionAlgorithm) *Server {
+// NewServer creates a new API server - now accepts interface instead of concrete type
+func NewServer(fusionAlgorithm FusionAlgorithmInterface) *Server {
+	return &Server{
+		fusionAlgorithm: fusionAlgorithm,
+	}
+}
+
+// NewServerWithFusion creates a new API server with regular FusionAlgorithm (backward compatibility)
+func NewServerWithFusion(fusionAlgorithm *fusion.FusionAlgorithm) *Server {
+	return &Server{
+		fusionAlgorithm: fusionAlgorithm,
+	}
+}
+
+// NewServerWithRedis creates a new API server with RedisFusionAlgorithm
+func NewServerWithRedis(fusionAlgorithm *fusion.RedisFusionAlgorithm) *Server {
 	return &Server{
 		fusionAlgorithm: fusionAlgorithm,
 	}
@@ -35,6 +60,10 @@ func (s *Server) Router() http.Handler {
 	// Configuration endpoints
 	mux.HandleFunc("/config", s.handleConfig)
 	
+	// Redis-specific endpoints (if using RedisFusionAlgorithm)
+	mux.HandleFunc("/redis-stats", s.handleRedisStats)
+	mux.HandleFunc("/real-time-complexity", s.handleRealTimeComplexity)
+	
 	// Add CORS middleware
 	return s.corsMiddleware(mux)
 }
@@ -46,12 +75,27 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check if fusion algorithm supports health check
+	var healthStatus string = "healthy"
+	var healthDetails interface{} = nil
+	
+	if err := s.fusionAlgorithm.HealthCheck(); err != nil {
+		healthStatus = "degraded"
+		healthDetails = map[string]string{
+			"redis_error": err.Error(),
+		}
+	}
+
 	response := map[string]interface{}{
-		"status":    "healthy",
+		"status":    healthStatus,
 		"service":   "hybrid-metrics-server",
 		"version":   "1.0.0",
 		"timestamp": time.Now(),
 		"uptime":    time.Since(time.Now().Add(-time.Duration(s.fusionAlgorithm.GetStats().UptimeSeconds) * time.Second)),
+	}
+	
+	if healthDetails != nil {
+		response["details"] = healthDetails
 	}
 
 	s.writeJSONResponse(w, response)
@@ -158,6 +202,90 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	s.writeJSONResponse(w, response)
 }
 
+// handleRedisStats provides Redis-specific statistics (only works with RedisFusionAlgorithm)
+func (s *Server) handleRedisStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Check if this is a RedisFusionAlgorithm
+	if redisFusion, ok := s.fusionAlgorithm.(*fusion.RedisFusionAlgorithm); ok {
+		// Get real-time stats from Redis
+		realTimeStats, err := redisFusion.GetRealTimeStats()
+		if err != nil {
+			response := map[string]interface{}{
+				"error": "Failed to get Redis stats",
+				"details": err.Error(),
+				"fallback_stats": s.fusionAlgorithm.GetStats(),
+			}
+			s.writeJSONResponse(w, response)
+			return
+		}
+
+		// Get Redis keys for debugging
+		redisKeys, _ := redisFusion.GetRedisKeys()
+
+		response := map[string]interface{}{
+			"real_time_stats": realTimeStats,
+			"redis_keys": redisKeys,
+			"redis_health": "connected",
+			"timestamp": time.Now(),
+		}
+		s.writeJSONResponse(w, response)
+	} else {
+		response := map[string]interface{}{
+			"error": "Redis stats not available",
+			"reason": "Not using RedisFusionAlgorithm",
+			"algorithm_type": "FusionAlgorithm",
+		}
+		s.writeJSONResponse(w, response)
+	}
+}
+
+// handleRealTimeComplexity provides real-time complexity from Redis
+func (s *Server) handleRealTimeComplexity(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Check if this is a RedisFusionAlgorithm
+	if redisFusion, ok := s.fusionAlgorithm.(*fusion.RedisFusionAlgorithm); ok {
+		complexity, err := redisFusion.GetRealTimeComplexity()
+		if err != nil {
+			response := map[string]interface{}{
+				"error": "Failed to get real-time complexity",
+				"details": err.Error(),
+				"fallback_complexity": 0,
+			}
+			s.writeJSONResponse(w, response)
+			return
+		}
+
+		response := map[string]interface{}{
+			"current_complexity": complexity,
+			"source": "redis",
+			"timestamp": time.Now(),
+		}
+		s.writeJSONResponse(w, response)
+	} else {
+		// Fallback to local complexity
+		history := s.fusionAlgorithm.GetHistory()
+		var complexity float64
+		if len(history.ComplexityHistory) > 0 {
+			complexity = history.ComplexityHistory[len(history.ComplexityHistory)-1].Score
+		}
+
+		response := map[string]interface{}{
+			"current_complexity": complexity,
+			"source": "local",
+			"timestamp": time.Now(),
+		}
+		s.writeJSONResponse(w, response)
+	}
+}
+
 // handleConfig provides current configuration
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -165,9 +293,17 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// This would typically come from a config manager
-	// For now, return basic config info
+	// Determine algorithm type
+	algorithmType := "FusionAlgorithm"
+	redisEnabled := false
+	if _, ok := s.fusionAlgorithm.(*fusion.RedisFusionAlgorithm); ok {
+		algorithmType = "RedisFusionAlgorithm"
+		redisEnabled = true
+	}
+
 	response := map[string]interface{}{
+		"algorithm_type": algorithmType,
+		"redis_enabled": redisEnabled,
 		"fusion_algorithm": map[string]interface{}{
 			"complexity_weight":     0.6,
 			"cpu_weight":           0.3,

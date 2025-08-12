@@ -4,10 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log" 
 	"net/http"
 	"time"
-
-	"hybrid-metrics/pkg/metrics"
 )
 
 // ComplexityCollector collects complexity metrics from REAL user queries ONLY
@@ -22,39 +21,55 @@ type ComplexityCollector struct {
 	baselineComplexity float64
 	previousCacheSize int
 	isFirstRun        bool
+	lastSeenQueries   map[string]time.Time  // Track last seen time for each query
 }
 
 // ComplexityStatsResponse represents the response from REST complexity-stats endpoint
 type ComplexityStatsResponse struct {
 	CacheSize     int       `json:"cacheSize"`
 	CachedQueries []struct {
-		Query      string  `json:"query"`
-		Complexity float64 `json:"complexity"`
+		Query      string    `json:"query"`
+		Complexity float64   `json:"complexity"`
+		HitCount   int       `json:"hitCount"`    // Track hit count
+		LastUsed   string    `json:"lastUsed"`   // Track last used time
 	} `json:"cachedQueries"`
 	LastUpdated string `json:"lastUpdated"`
 }
 
 // NewComplexityCollector creates a new authentic complexity collector
 func NewComplexityCollector(graphqlURL string) *ComplexityCollector {
-	// REST server runs on GraphQL port + 1
-	restURL := "http://localhost:4001" // Default REST server port
-	if graphqlURL == "http://localhost:4000" {
-		restURL = "http://localhost:4001"
+	// Kubernetes service URLs (hardcoded)
+	if graphqlURL == "" {
+		graphqlURL = "http://graphql-server:4000"  // Kubernetes service name
 	}
+	
+	restURL := "http://graphql-server:4001"  // GraphQL REST endpoints
+
+	log.Printf("📊 GraphQL URL: %s", graphqlURL)
+	log.Printf("📊 REST URL: %s", restURL)
 
 	return &ComplexityCollector{
-		graphqlURL:        graphqlURL,
+		graphqlURL:         graphqlURL,
 		restURL:           restURL,
 		client: &http.Client{
 			Timeout: 5 * time.Second,
 		},
 		complexityHistory:  make([]float64, 0, 100),
-		lastComplexity:     20.0, // Baseline when no user activity
+		lastComplexity:     20.0,
 		baselineComplexity: 20.0,
 		lastQueryTime:      time.Now(),
 		previousCacheSize:  0,
 		isFirstRun:         true,
+		lastSeenQueries:    make(map[string]time.Time),  // Track query timestamps
 	}
+}
+
+// Helper function for min
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // Collect fetches complexity from REAL user queries ONLY
@@ -106,7 +121,7 @@ func (c *ComplexityCollector) Collect() (float64, error) {
 	}
 }
 
-// detectRealUserQuery checks REST server for new real user queries
+// detectRealUserQuery checks REST server for new OR recently active queries
 func (c *ComplexityCollector) detectRealUserQuery() (float64, bool, error) {
 	// Check REST server for complexity stats
 	url := c.restURL + "/complexity-stats"
@@ -146,17 +161,61 @@ func (c *ComplexityCollector) detectRealUserQuery() (float64, bool, error) {
 		return 0, false, nil
 	}
 
-	// Check if cache size increased (new query arrived)
+	// ENHANCED LOGIC: Check for both new queries AND recently active queries
+	var mostRecentComplexity float64
+	var hasRecentActivity bool
+	var mostRecentTime time.Time
+
+	for _, query := range statsResponse.CachedQueries {
+		// Parse the lastUsed timestamp
+		lastUsed, err := time.Parse(time.RFC3339, query.LastUsed)
+		if err != nil {
+			log.Printf("⚠️ Failed to parse lastUsed time: %v", err)
+			continue
+		}
+
+		// Check if this query was used recently (within last 30 seconds)
+		if time.Since(lastUsed) < 30*time.Second {
+			// Check if we've seen this query before
+			queryKey := query.Query[:min(50, len(query.Query))] // Use first 50 chars as key
+			
+			lastSeenTime, exists := c.lastSeenQueries[queryKey]
+			
+			// If this is a new query OR the lastUsed time has updated since we last saw it
+			if !exists || lastUsed.After(lastSeenTime) {
+				c.lastSeenQueries[queryKey] = lastUsed
+				
+				// This is recent activity!
+				if lastUsed.After(mostRecentTime) {
+					mostRecentTime = lastUsed
+					mostRecentComplexity = query.Complexity
+					hasRecentActivity = true
+				}
+				
+				log.Printf("🔍 ACTIVE QUERY detected: %.50s... (Complexity: %.2f, Last used: %v)", 
+					query.Query, query.Complexity, lastUsed.Format("15:04:05"))
+			}
+		}
+	}
+
+	// Also check for new queries (cache size increase) - original logic
 	if statsResponse.CacheSize > c.previousCacheSize {
-		// New query detected!
 		c.previousCacheSize = statsResponse.CacheSize
-		
-		// Get the latest (most recent) query complexity
 		latestQuery := statsResponse.CachedQueries[len(statsResponse.CachedQueries)-1]
+		
+		log.Printf("🆕 NEW QUERY detected: %.50s... (Complexity: %.2f)", 
+			latestQuery.Query, latestQuery.Complexity)
+		
+		// New queries take priority
 		return latestQuery.Complexity, true, nil
 	}
 
-	// Cache size same - no new queries
+	// Return the most recently active query if any
+	if hasRecentActivity {
+		return mostRecentComplexity, true, nil
+	}
+
+	// No recent activity
 	return 0, false, nil
 }
 
@@ -184,10 +243,10 @@ func (c *ComplexityCollector) getDecayedComplexity() float64 {
 }
 
 // CollectDetailed collects detailed complexity metrics with authenticity info
-func (c *ComplexityCollector) CollectDetailed() (metrics.ComplexityMetrics, error) {
+func (c *ComplexityCollector) CollectDetailed() (map[string]interface{}, error) {
 	complexity, err := c.Collect()
 	if err != nil {
-		return metrics.ComplexityMetrics{}, err
+		return nil, err
 	}
 
 	// Determine query type and authenticity
@@ -196,10 +255,10 @@ func (c *ComplexityCollector) CollectDetailed() (metrics.ComplexityMetrics, erro
 		queryType = c.determineQueryType(complexity)
 	}
 
-	return metrics.ComplexityMetrics{
-		Score:     complexity,
-		QueryType: queryType,
-		Timestamp: time.Now(),
+	return map[string]interface{}{
+		"score":     complexity,
+		"queryType": queryType,
+		"timestamp": time.Now(),
 	}, nil
 }
 
@@ -303,9 +362,10 @@ func (c *ComplexityCollector) GetStats() map[string]interface{} {
 		"seconds_since_last_query":  int(timeSinceLastQuery.Seconds()),
 		"history_size":              len(c.complexityHistory),
 		"activity_status":           c.GetActivityStatus(),
-		"collector_type":            "authentic_dual_server",
+		"collector_type":            "authentic_dual_server_enhanced",
 		"is_currently_active":       c.HasRecentRealActivity(),
 		"cache_size_tracking":       c.previousCacheSize,
+		"tracked_queries":           len(c.lastSeenQueries),
 		"graphql_url":               c.graphqlURL,
 		"rest_url":                  c.restURL,
 	}
@@ -333,11 +393,5 @@ func (c *ComplexityCollector) WaitForUserActivity(timeout time.Duration) bool {
 
 // PrintInstructions prints user instructions for testing
 func (c *ComplexityCollector) PrintInstructions() {
-	fmt.Printf("\n🎯 HOW TO TEST YOUR AUTHENTIC ALGORITHM:\n")
-	fmt.Printf("1. Open Apollo Studio: %s/graphql\n", c.graphqlURL)
-	fmt.Printf("2. Send queries and watch this terminal for scaling decisions\n")
-	fmt.Printf("3. Simple query: query { user(id: \"1\") { name } }\n")
-	fmt.Printf("4. Complex query: query { systemAnalytics { totalUsers topUsers { posts } } }\n")
-	fmt.Printf("5. Watch for: 🔍 REAL USER QUERY detected\n")
-	fmt.Printf("6. Then see: 🎯 SCALING DECISION based on your complexity!\n\n")
+	// Instructions removed - cleaner logs
 }

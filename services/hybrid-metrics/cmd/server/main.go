@@ -16,16 +16,37 @@ import (
 )
 
 func main() {
-	log.Println("🚀 Starting Hybrid Metrics Server...")
+	log.Println("🚀 Starting Hybrid Metrics Server with Redis...")
 
 	// Load configuration
 	cfg := config.Load()
 	log.Printf("📊 Configuration loaded: GraphQL URL: %s, Port: %s", cfg.GraphQLURL, cfg.Port)
 
-	// Initialize components
+	// Initialize Redis-backed fusion algorithm
+	redisURL := os.Getenv("REDIS_URL")
+	if redisURL == "" {
+		redisURL = "redis-service:6379" // Kubernetes service name
+	}
+	
+	log.Printf("🔗 Connecting to Redis at: %s", redisURL)
+	
+	fusionAlgorithm, err := fusion.NewRedisFusionAlgorithm(cfg.FusionConfig, redisURL)
+	if err != nil {
+		log.Fatalf("❌ Failed to initialize Redis fusion algorithm: %v", err)
+	}
+	defer fusionAlgorithm.Close()
+	
+	log.Println("✅ Redis fusion algorithm initialized")
+	
+	// Test Redis connection
+	if err := fusionAlgorithm.HealthCheck(); err != nil {
+		log.Fatalf("❌ Redis health check failed: %v", err)
+	}
+	log.Println("✅ Redis connection healthy")
+
+	// Initialize other components
 	complexityCollector := collector.NewComplexityCollector(cfg.GraphQLURL)
 	systemCollector := collector.NewSystemCollector()
-	fusionAlgorithm := fusion.NewFusionAlgorithm(cfg.FusionConfig)
 
 	// Start collectors
 	log.Println("📈 Starting metric collectors...")
@@ -110,6 +131,7 @@ func main() {
 		log.Printf("📊 Metrics available at: http://localhost:%s/metrics", cfg.Port)
 		log.Printf("🔍 Fusion stats at: http://localhost:%s/fusion-stats", cfg.Port)
 		log.Printf("📈 Health check at: http://localhost:%s/health", cfg.Port)
+		log.Printf("🔗 Redis state syncing to: %s", redisURL)
 		
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("❌ Failed to start server: %v", err)
