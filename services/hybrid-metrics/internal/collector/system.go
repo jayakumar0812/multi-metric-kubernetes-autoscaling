@@ -42,14 +42,12 @@ func (s *SystemCollector) Collect() (metrics.SystemMetrics, error) {
 
 // getCPUUsage calculates CPU usage percentage
 func (s *SystemCollector) getCPUUsage() (float64, error) {
-	// For cross-platform compatibility, we'll use a simple approach
-	// In production, you'd use a proper system monitoring library
+	// For cross-platform compatibility
 	
 	// Get number of goroutines as a proxy for activity
 	numGoroutines := runtime.NumGoroutine()
 	
 	// Simple simulation of CPU usage based on system activity
-	// This is a placeholder - in real implementation, use proper CPU monitoring
 	cpuUsage := float64(numGoroutines) * 2.0
 	
 	// Add some realistic variation
@@ -62,7 +60,7 @@ func (s *SystemCollector) getCPUUsage() (float64, error) {
 		cpuUsage = s.lastCPUUsage*0.7 + (cpuUsage+variation)*0.3
 	}
 	
-	// Ensure CPU usage is within bounds
+	// CPU usage is within bounds
 	if cpuUsage < 0 {
 		cpuUsage = 0
 	}
@@ -82,11 +80,10 @@ func (s *SystemCollector) getMemoryUsage() (float64, error) {
 	runtime.ReadMemStats(&m)
 	
 	// Calculate memory usage as percentage
-	// This is simplified - in production you'd get actual system memory
 	allocMB := float64(m.Alloc) / 1024 / 1024
 	sysMB := float64(m.Sys) / 1024 / 1024
 	
-	// Simulate memory usage percentage (simplified)
+	// Simulate memory
 	memoryUsage := (allocMB / (sysMB + 100)) * 100 // +100 to simulate total system memory
 	
 	if memoryUsage > 100 {
@@ -115,8 +112,8 @@ func (s *SystemCollector) GetDetailedMetrics() map[string]interface{} {
 
 // SimulateLoad creates artificial load for testing purposes
 func (s *SystemCollector) SimulateLoad(intensity float64) {
-	// This is for testing your fusion algorithm
-	// Creates some CPU and memory activity
+	// testing fusion algorithm
+	// CPU and memory activity
 	
 	duration := time.Duration(intensity * 100) * time.Millisecond
 	

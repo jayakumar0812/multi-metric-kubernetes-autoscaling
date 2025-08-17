@@ -17,7 +17,7 @@ func Load() *Config {
 		GraphQLURL: getGraphQLURL(),
 		Port:       getPort(),
 		FusionConfig: metrics.FusionConfig{
-			// ✅ Use the correct field names from metrics package
+			// field names from metrics package
 			ComplexityWeight:    0.6,               // ← Correct field name
 			CPUWeight:          0.3,               // ← Correct field name  
 			MemoryWeight:       0.1,               // ← Correct field name

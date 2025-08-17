@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// ComplexityCollector collects complexity metrics from REAL user queries ONLY
+// ComplexityCollector collects complexity metrics from user queries ONLY
 type ComplexityCollector struct {
 	graphqlURL        string
 	restURL           string
@@ -38,7 +38,7 @@ type ComplexityStatsResponse struct {
 
 // NewComplexityCollector creates a new authentic complexity collector
 func NewComplexityCollector(graphqlURL string) *ComplexityCollector {
-	// Kubernetes service URLs (hardcoded)
+	// Kubernetes service URLs
 	if graphqlURL == "" {
 		graphqlURL = "http://graphql-server:4000"  // Kubernetes service name
 	}
@@ -198,7 +198,7 @@ func (c *ComplexityCollector) detectRealUserQuery() (float64, bool, error) {
 		}
 	}
 
-	// Also check for new queries (cache size increase) - original logic
+	// Also check for new queries (cache size increase)
 	if statsResponse.CacheSize > c.previousCacheSize {
 		c.previousCacheSize = statsResponse.CacheSize
 		latestQuery := statsResponse.CachedQueries[len(statsResponse.CachedQueries)-1]

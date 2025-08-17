@@ -1,0 +1,700 @@
+# ============================================
+# COMPLETE KUBERNETES MANIFESTS WITH DATADOG
+# Hybrid GraphQL Auto-Scaling System - FULLY FIXED
+# ============================================
+
+# 1. DATADOG SECRET (API KEY)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: datadog-secret
+  namespace: default
+type: Opaque
+data:
+  api-key: NDhiZWY3YmY5NDMxYjNlYWFhZjY1MjMyMzUxZTNkYTQ=   # Replace with your actual key
+
+---
+# 2. DATADOG AGENT DAEMONSET - FIXED: Removed system-probe annotation + Added hostPID
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: datadog-agent
+  namespace: default
+  labels:
+    app: datadog-agent
+spec:
+  selector:
+    matchLabels:
+      app: datadog-agent
+  template:
+    metadata:
+      labels:
+        app: datadog-agent
+      annotations: {}
+    spec:
+      serviceAccountName: datadog-agent
+      hostNetwork: true
+      hostPID: true           # ADDED: Fix for cgroup namespace warning
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+      - name: datadog-agent
+        image: gcr.io/datadoghq/agent:7
+        imagePullPolicy: Always
+        ports:
+          - containerPort: 8125  # DogStatsD
+            name: dogstatsdport
+            protocol: UDP
+          - containerPort: 8126  # APM
+            name: traceport
+            protocol: TCP
+        env:
+          # Core configuration
+          - name: DD_API_KEY
+            valueFrom:
+              secretKeyRef:
+                name: datadog-secret
+                key: api-key
+          - name: DD_SITE
+            value: "us5.datadoghq.com"
+          - name: DD_KUBERNETES_KUBELET_HOST
+            valueFrom:
+              fieldRef:
+                fieldPath: status.hostIP
+          - name: DD_CLUSTER_NAME
+            value: "graphql-hpa-research"
+          
+          # Tagging
+          - name: DD_TAGS
+            value: "env:research project:graphql-hpa component:auto-scaling"
+          
+          # Features
+          - name: DD_APM_ENABLED
+            value: "true"
+          - name: DD_LOGS_ENABLED
+            value: "true"
+          - name: DD_DOGSTATSD_NON_LOCAL_TRAFFIC
+            value: "true"
+          - name: DD_PROCESS_AGENT_ENABLED
+            value: "false"  # Disabled to reduce complexity
+          - name: DD_SYSTEM_PROBE_ENABLED
+            value: "false"   # Disabled to avoid connection issues
+          
+          # FIXED: Process config deprecation warnings
+          - name: DD_PROCESS_CONFIG_CONTAINER_COLLECTION_ENABLED
+            value: "true"
+          - name: DD_PROCESS_CONFIG_PROCESS_COLLECTION_ENABLED
+            value: "false"
+          
+          # Logging
+          - name: DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL
+            value: "true"
+          - name: DD_LOG_LEVEL
+            value: "INFO"
+            
+        volumeMounts:
+          - name: dockersocket
+            mountPath: /var/run/docker.sock
+          - name: procdir
+            mountPath: /host/proc
+            readOnly: true
+          - name: cgroups
+            mountPath: /host/sys/fs/cgroup
+            readOnly: true
+          
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+      
+      volumes:
+        - hostPath:
+            path: /var/run/docker.sock
+          name: dockersocket
+        - hostPath:
+            path: /proc
+          name: procdir
+        - hostPath:
+            path: /sys/fs/cgroup
+          name: cgroups
+
+---
+# 3. DATADOG RBAC - FIXED: Complete proper YAML structure
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: datadog-agent
+  namespace: default
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: datadog-agent
+rules:
+# Core resources - expanded permissions
+- apiGroups: [""]
+  resources: 
+    - "nodes"
+    - "nodes/metrics" 
+    - "nodes/spec"
+    - "nodes/proxy"           # ADDED: Fix for proxy access
+    - "nodes/stats"           # ADDED: For node statistics
+    - "pods"
+    - "pods/status"           # ADDED: For pod status
+    - "services"
+    - "events"
+    - "endpoints"             # ADDED: For service discovery
+    - "configmaps"            # ADDED: For configuration access
+    - "secrets"               # ADDED: For secret access (if needed)
+  verbs: ["get", "list", "watch"]
+
+# App resources
+- apiGroups: ["apps"]
+  resources: 
+    - "deployments"
+    - "replicasets" 
+    - "daemonsets"
+    - "statefulsets"
+  verbs: ["get", "list", "watch"]
+
+# HPA resources
+- apiGroups: ["autoscaling"]
+  resources: ["horizontalpodautoscalers"]
+  verbs: ["get", "list", "watch"]
+
+# Metrics resources
+- apiGroups: ["metrics.k8s.io"]
+  resources: ["nodes", "pods"]
+  verbs: ["get", "list"]
+
+# Custom metrics
+- apiGroups: ["custom.metrics.k8s.io"]
+  resources: ["*"]
+  verbs: ["get", "list"]
+
+# External metrics  
+- apiGroups: ["external.metrics.k8s.io"]
+  resources: ["*"]
+  verbs: ["get", "list"]
+
+# Non-resource URLs
+- nonResourceURLs: ["/metrics", "/healthz", "/stats/*"]
+  verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: datadog-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: datadog-agent
+subjects:
+- kind: ServiceAccount
+  name: datadog-agent
+  namespace: default
+
+---
+# 4. GRAPHQL SERVER (WITH DATADOG INTEGRATION)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: graphql-server
+  labels:
+    app: graphql-server
+    component: api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: graphql-server
+  template:
+    metadata:
+      labels:
+        app: graphql-server
+        service: graphql-server
+      annotations:
+        # Prometheus scraping
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "4001"
+        prometheus.io/path: "/metrics"
+        
+        # Datadog annotations
+        ad.datadoghq.com/graphql-server.logs: '[{"source": "graphql", "service": "graphql-server"}]'
+        ad.datadoghq.com/graphql-server.check_names: '["prometheus"]'
+        ad.datadoghq.com/graphql-server.init_configs: '[{}]'
+        ad.datadoghq.com/graphql-server.instances: |
+          [{
+            "prometheus_url": "http://%%host%%:4001/metrics",
+            "namespace": "graphql",
+            "metrics": ["*"],
+            "tags": ["env:research", "project:graphql-hpa"]
+          }]
+    spec:
+      containers:
+      - name: graphql-server
+        image: lucifer08/auto-scaler:v1
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 4000
+          name: graphql
+          protocol: TCP
+        - containerPort: 4001
+          name: rest-api
+          protocol: TCP
+        
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        
+        env:
+        # Application config
+        - name: NODE_ENV
+          value: "production"
+        - name: GRAPHQL_PORT
+          value: "4000"
+        - name: REST_PORT
+          value: "4001"
+        - name: REDIS_URL
+          value: "redis-service:6379"
+        
+        # Datadog APM config
+        - name: DD_AGENT_HOST
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
+        - name: DD_ENV
+          value: "research"
+        - name: DD_SERVICE
+          value: "graphql-server"
+        - name: DD_VERSION
+          value: "v1"
+        - name: DD_TRACE_ENABLED
+          value: "true"
+        - name: DD_LOGS_INJECTION
+          value: "true"
+        - name: DD_PROFILING_ENABLED
+          value: "true"
+
+---
+# 5. HYBRID METRICS SERVER (WITH DATADOG)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hybrid-metrics-server
+  labels:
+    app: hybrid-metrics-server
+    component: metrics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hybrid-metrics-server
+  template:
+    metadata:
+      labels:
+        app: hybrid-metrics-server
+        service: hybrid-metrics
+      annotations:
+        ad.datadoghq.com/hybrid-metrics.logs: '[{"source": "metrics", "service": "hybrid-metrics"}]'
+        ad.datadoghq.com/hybrid-metrics.check_names: '["prometheus"]'
+        ad.datadoghq.com/hybrid-metrics.init_configs: '[{}]'
+        ad.datadoghq.com/hybrid-metrics.instances: |
+          [{
+            "prometheus_url": "http://%%host%%:8080/metrics", 
+            "namespace": "hybrid_metrics",
+            "metrics": ["*"],
+            "tags": ["env:research", "project:graphql-hpa"]
+          }]
+    spec:
+      containers:
+      - name: hybrid-metrics
+        image: lucifer08/auto-scaler:hy-redis-v1.0
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: metrics
+          protocol: TCP
+        - containerPort: 3001
+          name: http-api
+          protocol: TCP
+        
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        
+        env:
+        # Application config
+        - name: GRAPHQL_URL
+          value: "http://graphql-server:4000"
+        - name: GRAPHQL_STATS_URL
+          value: "http://graphql-server:4001"
+        - name: PORT
+          value: "3001"
+        - name: LOG_LEVEL
+          value: "info"
+        - name: REDIS_URL
+          value: "redis-service:6379"
+        
+        # Datadog config
+        - name: DD_AGENT_HOST
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
+        - name: DD_ENV
+          value: "research"
+        - name: DD_SERVICE
+          value: "hybrid-metrics"
+        - name: DD_VERSION
+          value: "v1.0"
+        - name: DD_TRACE_ENABLED
+          value: "true"
+
+---
+# 6. CUSTOM METRICS API (WITH DATADOG)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: custom-metrics-api
+  labels:
+    app: custom-metrics-api
+    component: metrics-bridge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: custom-metrics-api
+  template:
+    metadata:
+      labels:
+        app: custom-metrics-api
+        service: custom-metrics
+      annotations:
+        ad.datadoghq.com/custom-metrics.logs: '[{"source": "metrics", "service": "custom-metrics"}]'
+    spec:
+      serviceAccountName: custom-metrics-apiserver
+      containers:
+      - name: custom-metrics-api
+        image: lucifer08/auto-scaler:custom-api-v1.0
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8443
+          name: https
+          protocol: TCP
+        
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8443
+            scheme: HTTPS
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8443
+            scheme: HTTPS
+          initialDelaySeconds: 15
+          periodSeconds: 15
+        
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        
+        env:
+        # Application config
+        - name: HYBRID_METRICS_URL
+          value: "http://hybrid-metrics-server:3001"
+        - name: GRAPHQL_STATS_URL
+          value: "http://graphql-server:4001"
+        - name: PORT
+          value: "8443"
+        - name: TLS_CERT_FILE
+          value: "/etc/certs/tls.crt"
+        - name: TLS_KEY_FILE
+          value: "/etc/certs/tls.key"
+        - name: LOG_LEVEL
+          value: "info"
+        - name: REDIS_URL
+          value: "redis-service:6379"
+        
+        # Datadog config
+        - name: DD_AGENT_HOST
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
+        - name: DD_ENV
+          value: "research"
+        - name: DD_SERVICE
+          value: "custom-metrics-api"
+        - name: DD_VERSION
+          value: "v1.0"
+        - name: DD_TRACE_ENABLED
+          value: "true"
+        
+        volumeMounts:
+        - name: tls-certs
+          mountPath: /etc/certs
+          readOnly: true
+      
+      volumes:
+      - name: tls-certs
+        secret:
+          secretName: custom-metrics-api-tls
+
+---
+# 7. REDIS WITH DATADOG MONITORING
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  labels:
+    app: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+        service: redis
+      annotations:
+        ad.datadoghq.com/redis.check_names: '["redisdb"]'
+        ad.datadoghq.com/redis.init_configs: '[{}]'
+        ad.datadoghq.com/redis.instances: |
+          [{
+            "host": "%%host%%",
+            "port": 6379,
+            "tags": ["env:research", "project:graphql-hpa"]
+          }]
+        ad.datadoghq.com/redis.logs: '[{"source": "redis", "service": "redis"}]'
+    spec:
+      containers:
+      - name: redis
+        image: redis:7-alpine
+        ports:
+        - containerPort: 6379
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+        command: ["redis-server"]
+        args: ["--maxmemory", "100mb", "--maxmemory-policy", "allkeys-lru"]
+
+---
+# 8. SERVICES - FIXED: Added required port names
+apiVersion: v1
+kind: Service
+metadata:
+  name: graphql-server
+spec:
+  type: ClusterIP
+  ports:
+  - port: 4000
+    targetPort: 4000
+    name: graphql    # FIXED: Added required name
+  - port: 4001
+    targetPort: 4001
+    name: rest-api   # FIXED: Added required name
+  selector:
+    app: graphql-server
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hybrid-metrics-server
+spec:
+  ports:
+  - port: 3001
+    targetPort: 3001
+    name: http-api   # FIXED: Added required name
+  - port: 8080
+    targetPort: 8080
+    name: metrics    # FIXED: Added required name
+  selector:
+    app: hybrid-metrics-server
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: custom-metrics-api
+spec:
+  ports:
+  - port: 8443
+    targetPort: 8443
+    name: https      # FIXED: Added required name
+  selector:
+    app: custom-metrics-api
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-service
+spec:
+  ports:
+  - port: 6379
+    targetPort: 6379
+    name: redis      # FIXED: Added required name
+  selector:
+    app: redis
+
+---
+# 9. RBAC FOR CUSTOM METRICS API
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: custom-metrics-apiserver
+  namespace: default
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: custom-metrics-apiserver
+rules:
+- apiGroups: [""]
+  resources: ["pods", "nodes", "nodes/stats"]
+  verbs: ["get", "list"]
+- apiGroups: ["external.metrics.k8s.io"]
+  resources: ["*"]
+  verbs: ["*"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: custom-metrics-apiserver
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: custom-metrics-apiserver
+subjects:
+- kind: ServiceAccount
+  name: custom-metrics-apiserver
+  namespace: default
+
+---
+# 10. EXTERNAL METRICS API REGISTRATION
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: v1beta1.external.metrics.k8s.io
+spec:
+  service:
+    name: custom-metrics-api
+    namespace: default
+    port: 8443
+  group: external.metrics.k8s.io
+  version: v1beta1
+  insecureSkipTLSVerify: true
+  groupPriorityMinimum: 100
+  versionPriority: 100
+
+---
+# 11. HORIZONTAL POD AUTOSCALER
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: graphql-complexity-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: graphql-server
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: External
+    external:
+      metric:
+        name: graphql_complexity_score
+        selector:
+          matchLabels:
+            service: graphql-server
+      target:
+        type: Value
+        averageValue: "50000"
+
+---
+# 12. TLS SECRET - FIXED: Proper structure and valid certificates
+apiVersion: v1
+data:
+  tls.crt: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURUekNDQWplZ0F3SUJBZ0lVWm1LSFovbWdxWEVhU2ZtNnFrRlR3SGJod2h3d0RRWUpLb1pJaHZjTkFRRUwKQlFBd056RTFNRE1HQTFVRUF3d3NZM1Z6ZEc5dExXMWxkSEpwWTNNdFlYQnBMbVJsWm1GMWJIUXVjM1pqTG1OcwpkWE4wWlhJdWJHOWpZV3d3SGhjTk1qVXdPREEwTVRJMU9ERXpXaGNOTWpZd09EQTBNVEkxT0RFeldqQTNNVFV3Ck13WURWUVFEREN4amRYTjBiMjB0YldWMGNtbGpjeTFoY0drdVpHVm1ZWFZzZEM1emRtTXVZMngxYzNSbGNpNXMKYjJOaGJEQ0NBU0l3RFFZSktvWklodmNOQVFFQkJRQURnZ0VQQURDQ0FRb0NnZ0VCQU50NDMyVlZCaTFZQzI5eQpYdEdYZVpkNXZ6cHpDc3h0b0ZwaS9JdGdmeUFPVkpvaXBmdEZZRGRqTzdNUFRNaHZTNDdjSWtMMjJ6WGJOZENvCnpVMUwwaFRKY1hjNEV6NjVmcHYwQk91c3E3MTIzNC9GMHJQb2FXQ3NKUHNWV0kxOEt6dHo4T0NVSXNheExXcEYKSlpTQS80TGczL1FvUUp6cEN1bXcraTBSUjZxUTdVZnV3Mmtzc3ZoTDY5TUVIOUpNT2hzQnRsckxvL1ErZUNyUwpSY0dvdDVOaTllc2NUUmRNWEg3VG9TcmEvektDY3BwWGlXTVBseUsrZEYxWngrK3dITHFYeDc4TkVMUVF2dHFsCnBTRGVaU1E2TEkxZVYvbTAzQnMyeEZRajVvemdraDJjWkcxV0JzZlRUYkdhQ1EzMy9MbC8rblNmK1NqVXhzQUsKYzdRUlFwTUNBd0VBQWFOVE1GRXdIUVlEVlIwT0JCWUVGT21EQ0tGeDNhY3lhNlc3TkVta2hFVkpDMzE4TUI4RwpBMVVkSXdRWU1CYUFGT21EQ0tGeDNhY3lhNlc3TkVta2hFVkpDMzE4TUE4R0ExVWRFd0VCL3dRRk1BTUJBZjh3CkRRWUpLb1pJaHZjTkFRRUxCUUFEZ2dFQkFISFFnd1NPRUF4VUpqYzJnU2JaZ0VpcEg5YmJqR1hMMDBJQ2cvbjUKOVFHM1p2eWE3NGZZWkhBeFhWNU0vZTNzb09QTHNTQ21yTG1yM0dIaHNFVXJmS2VNUDkwcitSU2VGVEpJbFJtNAp2bk56UEkvakFSZEVDQjUwWHNUV1RIdDBFVXJmaVlaSnR4RXpkS3pvdUEvTi95UDFXa0pRRlprcmpHWjF6QnFsCmJJSnlFMzcxNUlCTTgvMlloZThFQm83OUxqSTRhVmlyWmRGZzFvZHBWY3hIM3p1aGtwSEY3eWRPd2IwaVZyM1AKWEwrcTBEMDdxSXo2d1RCMDV0V0U0b2FIaWFtU1dhWGt6RXhqcHBXaUhFNTF5blFuaXhzYXNVSVJSZnoybjFOQwp0TktKUTBmTWNYSzYyYUJTdVBRK3ljbkJJQlhtTzVVaFJRWkVubVdNaXZ5MS9UWT0KLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=
+  tls.key: LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1JSUV2Z0lCQURBTkJna3Foa2lHOXcwQkFRRUZBQVNDQktnd2dnU2tBZ0VBQW9JQkFRRGJlTjlsVlFZdFdBdHYKY2w3UmwzbVhlYjg2Y3dyTWJhQmFZdnlMWUg4Z0RsU2FJcVg3UldBM1l6dXpEMHpJYjB1TzNDSkM5dHMxMnpYUQpxTTFOUzlJVXlYRjNPQk0rdVg2YjlBVHJyS3U5ZHQrUHhkS3o2R2xnckNUN0ZWaU5mQ3M3Yy9EZ2xDTEdzUzFxClJTV1VnUCtDNE4vMEtFQ2M2UXJwc1BvdEVVZXFrTzFIN3NOcExMTDRTK3ZUQkIvU1REb2JBYlpheTZQMFBuZ3EKMGtYQnFMZVRZdlhySEUwWFRGeCswNkVxMnY4eWduS2FWNGxqRDVjaXZuUmRXY2Z2c0J5Nmw4ZS9EUkMwRUw3YQpwYVVnM21Va09peU5YbGY1dE53Yk5zUlVJK2FNNEpJZG5HUnRWZ2JIMDAyeG1na045L3k1Zi9wMG4va28xTWJBCkNuTzBFVUtUQWdNQkFBRUNnZ0VBVW9XV2FnR1lPd0I1L0VPaXgyZ1BQaGQzQWNFejlEM2NKMkJFMlJ0RmNZWXgKNVdyVndpOEp5SW0xYnRSMzZIMkFpWXpZRFJuSXZ1MVh4TWRUdXBhaHZWTXBLTXlhMytEYmJFUktmVnNGa0UzYwpMYkVTVXJjMnVEVENDdTZ4eHpGRENDM0dDb3Rvc0JENnBKU3ZWckZTWWFHd1U1dTIvOGpZWTVvNTF5eENLQzEzCnl6Y1MwN25PRWJvWXFSRFhFdHR4SGZ4REZYRmlVUkh6aklRSXRITG1BZWYxcm9LczdMb2M2ZXRwTWJOQ0NlM3gKRmpSb3F0R1YzL0ErT1dxSE42aERaVXdSVmhhdDh3VzJURk9SWTdVemRwNW92RG1QYzRsbUNBRERZOVJsZlBNWgpZNkVsUzBncU5VbzlWYk9Qa2xiZDhoTTZNVWdXT2VTMWRIeWxscWpPY1FLQmdRRGtleHhJWEdXbUtUY0F2elN1CkFEbXJLei9ySkZ6d1crc29PTThCaWhJZHBscm1wam10VGwvTnlSbDErS0tyOVl6bW9EZXdndzJDN3R3MStvVTIKeWJXS0ZCU1UvWHlFZ2ZIdytJVllUSGREamd3TEVnQmZldUdYK3pvZTBlUVlRS1B1K3ZESHdITWhjTVN0dFZMNApGd0NaYklhOXk5cUdxOVZuWFdpeWZrRVNkUUtCZ1FEMTUvMTlYbUtYd001S21iUzVKeXdDMXU4dWZhSFdhZGZqCkpqc2xOa2lPWFlBb2Q2UWNSTzh6THpzYVFEMTdEbXJ0NW1scFRzVkJnSzBpZHU5bnJLb0hONHVWOTV0YUFCZHYKYmFDLzhkdjR6VjNkRGcyck82OG94R1FxbjlGaFhqUU5kNS9Icmk0ZHB5RU1VZlJ4Q29OeVFDN25ETy9XcUM4dwpQOWxsYkJuUDV3S0JnQ1NhUUY2clJyR0cyc1BvM2NTZVRwN0lUL1lZbmpiM1VzWGZ5L0hnTDZUR1dMdW9sNGJYCkRtd0dNbWoreXZpblhzbzNrcFJaZWxtbWNHckpWbnYvZG5ESFpNQzFselFYS1M1RWNnQkNSN3p2emFnY1d5ancKbzZGWVl1ZzdFY0o4NElaUmR5OVkrbGk2R3hnRSsyUzVNcVJoaVhod1p2SzZKbmJudFBVYldzdGRBb0dCQU56SwpCbXo1UVBiV1U2TGhyVVdOS1ZRSFhjdlZXMmpqc2NZdXZtNGo5ak4xT2l1YmVJczFUYndjVFNtOXdqWHA5UkpUCmpoUFNlUVBlSUJYUXloWEJEd3paejRmQVFRa25DZU92ZitTM3FQVVVsNUZ5RzgzQ0VmdzlrVjVBRHNRb3kvM0gKaVh2RkpYelVZYlRwSk53V1AzMW1xWFlreEhkc25LbnF1aXY1U3BmREFvR0JBTFlQNm8vcFJwNTY1emlXdkdxcQpPUlRYSlFzSWxkdEIzZVlZTkVnM1lMMTc0MlhYTWpScG9qb1A0akN0R0pMMlgzT01NT3N4cTRTSEt3cW51NXJBCmtFYnFYeS9HSnd1UFNmanc3MlpyNHpiSXpnQ21NNzR6b2Rnc2g5R2M2aTRleDhEdExRaHdQTll0RFFSdCsxbmUKNkR2VXl1NlN2a1lIeURxb2JaSGRqSUthCi0tLS0tRU5EIFBSSVZBVEUgS0VZLS0tLS0K
+kind: Secret
+metadata:
+  creationTimestamp: null
+  name: custom-metrics-api-tls
+  namespace: default
+type: kubernetes.io/tls
+
+---
+# 13. TEST QUERIES CONFIGMAP
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-queries
+data:
+  simple-query.graphql: |
+    query SimpleUserQuery {
+      user(id: "1") {
+        name
+        email
+      }
+    }
+  medium-query.graphql: |
+    query MediumComplexityQuery {
+      users(first: 10) {
+        name
+        email
+        posts(first: 5) {
+          title
+          content
+        }
+      }
+    }
+  complex-query.graphql: |
+    query ComplexAnalyticsQuery {
+      systemAnalytics {
+        totalUsers
+        totalPosts
+        topUsers(limit: 20) {
+          name
+          email
+          posts(first: 10) {
+            title
+            comments(first: 10) {
+              content
+              author {
+                name
+              }
+            }
+          }
+        }
+      }
+    }

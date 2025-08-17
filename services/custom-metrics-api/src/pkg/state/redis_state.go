@@ -94,7 +94,7 @@ func (r *RedisStateManager) GetCurrentComplexity() (float64, error) {
     return val, err
 }
 
-// Get fusion algorithm result (more sophisticated than raw complexity)
+// Get fusion algorithm result
 func (r *RedisStateManager) GetFusionScore() (float64, error) {
     val, err := r.client.Get(r.ctx, KeyFusionScore).Float64()
     if err == redis.Nil {
@@ -169,7 +169,7 @@ func (r *RedisStateManager) GetFusionResult() (FusionResult, error) {
     }, nil
 }
 
-// Get correlation data to understand system learning
+// Get correlation data
 func (r *RedisStateManager) GetCorrelationData() (CorrelationData, error) {
     data, err := r.client.Get(r.ctx, KeyCorrelationData).Result()
     if err == redis.Nil {
@@ -212,7 +212,6 @@ func (r *RedisStateManager) GetComplexityHistory(limit int) ([]float64, error) {
 
 // Get the best metric for HPA scaling decisions
 func (r *RedisStateManager) GetOptimalMetricForHPA() (float64, string, error) {
-    // Try fusion result first (most sophisticated)
     fusionResult, err := r.GetFusionResult()
     if err == nil && fusionResult.Confidence > 0.7 {
         return fusionResult.Score, fmt.Sprintf("fusion_algorithm (confidence: %.2f)", fusionResult.Confidence), nil

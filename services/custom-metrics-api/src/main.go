@@ -114,7 +114,7 @@ func (s *ComplexityMetricsServer) checkTLSFiles() error {
 	return nil
 }
 
-// fetchComplexityFromRedis gets complexity from Redis (HIGHEST PRIORITY)
+// fetchComplexityFromRedis gets complexity from Redis
 func (s *ComplexityMetricsServer) fetchComplexityFromRedis() (float64, error) {
 	redisState, err := state.NewRedisStateManager(s.redisURL)
 	if err != nil {

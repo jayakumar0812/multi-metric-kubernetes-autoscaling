@@ -181,10 +181,10 @@ func (r *RedisFusionAlgorithm) GetRedisKeys() (map[string]interface{}, error) {
 }
 
 // ========================================
-// Original FusionAlgorithm (unchanged)
+// FusionAlgorithm
 // ========================================
 
-// FusionAlgorithm implements the hybrid auto-scaling algorithm
+// FusionAlgorithm
 type FusionAlgorithm struct {
 	config              metrics.FusionConfig
 	history             metrics.MetricHistory
@@ -195,7 +195,7 @@ type FusionAlgorithm struct {
 	mutex               sync.RWMutex
 }
 
-// NewFusionAlgorithm creates a new fusion algorithm instance
+// FusionAlgorithm creates a new fusion algorithm instance
 func NewFusionAlgorithm(config metrics.FusionConfig) *FusionAlgorithm {
 	return &FusionAlgorithm{
 		config:    config,

@@ -1,0 +1,181 @@
+# ============================================
+# TRADITIONAL CPU-BASED AUTO-SCALING SYSTEM
+# Deploy this FIRST for baseline testing
+# ============================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: traditional-graphql-server
+  labels:
+    app: traditional-graphql-server
+    type: traditional
+    test-phase: baseline
+spec:
+  replicas: 2  # Start with 2 pods
+  selector:
+    matchLabels:
+      app: traditional-graphql-server
+  template:
+    metadata:
+      labels:
+        app: traditional-graphql-server
+        type: traditional
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "4001"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: graphql-server
+        image: lucifer08/auto-scaler:v1  # Your GraphQL server image
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 4000
+          name: graphql
+          protocol: TCP
+        - containerPort: 4001
+          name: rest-api
+          protocol: TCP
+        
+        # IMPORTANT: Same resource limits as your intelligent system
+        resources:
+          requests:
+            cpu: 100m      # 0.1 CPU core minimum
+            memory: 128Mi  # 128MB memory minimum
+          limits:
+            cpu: 500m      # 0.5 CPU core maximum
+            memory: 512Mi  # 512MB memory maximum
+        
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: GRAPHQL_PORT
+          value: "4000"
+        - name: REST_PORT
+          value: "4001"
+        # Disable complexity analysis for pure traditional behavior
+        - name: COMPLEXITY_ANALYSIS_ENABLED
+          value: "false"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: traditional-graphql-server
+  labels:
+    app: traditional-graphql-server
+    type: traditional
+spec:
+  type: ClusterIP
+  ports:
+  - name: graphql
+    port: 4000
+    targetPort: 4000
+    protocol: TCP
+  - name: rest-api
+    port: 4001
+    targetPort: 4001
+    protocol: TCP
+  selector:
+    app: traditional-graphql-server
+
+---
+# ============================================
+# TRADITIONAL CPU-BASED HPA
+# ============================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: traditional-cpu-hpa
+  labels:
+    type: traditional
+    scaling-method: cpu-based
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: traditional-graphql-server
+  minReplicas: 2
+  maxReplicas: 10
+  
+  # TRADITIONAL METRICS: CPU threshold only
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70  # Scale when CPU > 70%
+  
+  # TRADITIONAL SCALING BEHAVIOR: Slow and conservative
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 300  # 5 minutes - typical traditional delay
+      policies:
+      - type: Percent
+        value: 50      # Conservative 50% increase
+        periodSeconds: 60
+      - type: Pods
+        value: 1       # Or add 1 pod max
+        periodSeconds: 60
+      selectPolicy: Min  # Take conservative approach
+      
+    scaleDown:
+      stabilizationWindowSeconds: 300  # 5 minutes - avoid thrashing
+      policies:
+      - type: Percent
+        value: 25      # Very conservative scale down (25%)
+        periodSeconds: 60
+      - type: Pods
+        value: 1       # Remove 1 pod at a time
+        periodSeconds: 60
+      selectPolicy: Min  # Very conservative
+
+---
+# ============================================
+# LOAD TESTING POD
+# ============================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: load-tester
+  labels:
+    app: load-tester
+    component: testing
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: load-tester
+  template:
+    metadata:
+      labels:
+        app: load-tester
+    spec:
+      containers:
+      - name: load-tester
+        image: curlimages/curl:latest
+        command: ["/bin/sh"]
+        args: ["-c", "while true; do sleep 3600; done"]
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: load-tester
+  labels:
+    app: load-tester
+spec:
+  selector:
+    app: load-tester
+  ports:
+  - port: 80
+    targetPort: 80

@@ -202,14 +202,14 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	s.writeJSONResponse(w, response)
 }
 
-// handleRedisStats provides Redis-specific statistics (only works with RedisFusionAlgorithm)
+// handleRedisStats provides Redis-specific statistics
 func (s *Server) handleRedisStats(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Check if this is a RedisFusionAlgorithm
+	// Check RedisFusionAlgorithm
 	if redisFusion, ok := s.fusionAlgorithm.(*fusion.RedisFusionAlgorithm); ok {
 		// Get real-time stats from Redis
 		realTimeStats, err := redisFusion.GetRealTimeStats()
@@ -356,7 +356,7 @@ func parseInt(s string, defaultValue int) int {
 		return defaultValue
 	}
 	
-	// Simple integer parsing (you might want to use strconv.Atoi for production)
+	// Simple integer parsing
 	result := defaultValue
 	if len(s) > 0 && s[0] >= '0' && s[0] <= '9' {
 		result = int(s[0] - '0')
