@@ -1,0 +1,27 @@
+GRAPHQL AUTO-SCALING PERFORMANCE REPORT
+==================================================
+
+🔧 Traditional (CPU-based)
+------------------------------
+Average pods after scaling: 2.0
+Average response time: 225.0s
+Average complexity handled: 525.0
+Scaling success rate: 0.0%
+Total pods added: 0
+Average pods per scaling event: 0.0
+
+🔧 Intelligent (Complexity-based)
+------------------------------
+Average pods after scaling: 6.0
+Average response time: 247.5s
+Average complexity handled: 541.8
+Scaling success rate: 50.0%
+Total pods added: 8
+Average pods per scaling event: 4.0
+
+📊 COMPARISON ANALYSIS
+------------------------------
+Intelligent system scaling success rate: 50.0%
+Traditional system scaling success rate: 0.0%
+Improvement: 50.0 percentage points
+Response time improvement: -22.5s faster

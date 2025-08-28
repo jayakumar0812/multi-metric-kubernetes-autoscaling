@@ -1,0 +1,5 @@
+Load_Level,Complexity_Score,Pod_Count_Before,Pod_Count_After,Wait_Time,Scaling_Result
+low,100,2,2,180,NO_SCALING
+medium,400,2,2,180,NO_SCALING
+high,800,2,2,240,NO_SCALING
+very_high,800,2,2,300,NO_SCALING

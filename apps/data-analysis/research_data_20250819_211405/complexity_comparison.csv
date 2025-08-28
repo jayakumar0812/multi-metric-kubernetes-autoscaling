@@ -1,0 +1,5 @@
+Query_Type,Complexity_Score,Response_Time
+simple,,3.799
+medium,,3.003
+complex,,6.357
+very_complex,,3.402

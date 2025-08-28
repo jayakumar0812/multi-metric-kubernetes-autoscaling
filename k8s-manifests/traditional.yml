@@ -106,7 +106,7 @@ spec:
       name: cpu
       target:
         type: Utilization
-        averageUtilization: 70  # Scale when CPU > 70%
+        averageUtilization: 20  # Scale when CPU > 70%
   
   # TRADITIONAL SCALING BEHAVIOR: Slow and conservative
   behavior:
